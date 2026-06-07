@@ -640,3 +640,5 @@ class InventoryCheckViewSet(viewsets.ModelViewSet):
             return Response({'error': '分区不存在'}, status=status.HTTP_404_NOT_FOUND)
         except Floor.DoesNotExist:
             return Response({'error': '楼层不存在'}, status=status.HTTP_404_NOT_FOUND)
+        except ValidationError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)

@@ -17,6 +17,24 @@ from ..utils import generate_inventory_check_no
 
 
 def create_inventory_check(data: dict, user: User) -> InventoryCheck:
+    project_id = data.get('project')
+    floor_id = data.get('floor')
+    if floor_id:
+        try:
+            floor = Floor.objects.get(id=floor_id)
+            if floor.project_id != project_id:
+                raise ValidationError('所选楼层不属于该项目')
+        except Floor.DoesNotExist:
+            raise ValidationError('楼层不存在')
+
+    zone_id = data.get('zone')
+    try:
+        zone = Zone.objects.get(id=zone_id)
+        if zone.project_id != project_id:
+            raise ValidationError('所选分区不属于该项目')
+    except Zone.DoesNotExist:
+        raise ValidationError('分区不存在')
+
     data['check_no'] = generate_inventory_check_no()
     data['created_by'] = user
     data['status'] = 'draft'
@@ -29,6 +47,27 @@ def update_inventory_check_items(
 ) -> InventoryCheck:
     if inventory_check.status not in ['draft', 'rejected']:
         raise ValidationError('只能修改草稿或审核拒绝状态的盘点单')
+
+    all_zone_ids = inventory_check.zone.get_all_child_ids()
+
+    for item_data in items_data:
+        material_category_id = item_data['material_category']
+        material_batch_id = item_data['material_batch']
+        book_quantity = item_data['book_quantity']
+
+        stock = MaterialStock.objects.filter(
+            zone_id__in=all_zone_ids,
+            floor=inventory_check.floor,
+            material_category_id=material_category_id,
+            material_batch_id=material_batch_id
+        ).first()
+
+        current_quantity = stock.quantity if stock else 0
+        if abs(float(book_quantity) - float(current_quantity)) > 0.0001:
+            category_name = stock.material_category.name if stock else material_category_id
+            raise ValidationError(
+                f'材料 {category_name} 的账面数量与当前库存不符，请重新加载账面数量'
+            )
 
     inventory_check.items.all().delete()
 
@@ -76,6 +115,22 @@ def audit_inventory_check(
 
     if status not in ['approved', 'rejected']:
         raise ValidationError('审核状态无效')
+
+    if status == 'approved':
+        all_zone_ids = inventory_check.zone.get_all_child_ids()
+        for item in inventory_check.items.all():
+            stock = MaterialStock.objects.filter(
+                zone_id__in=all_zone_ids,
+                floor=inventory_check.floor,
+                material_category=item.material_category,
+                material_batch=item.material_batch
+            ).first()
+
+            current_quantity = stock.quantity if stock else 0
+            if abs(float(item.book_quantity) - float(current_quantity)) > 0.0001:
+                raise ValidationError(
+                    f'材料 {item.material_category.name} 的库存已变动（账面:{item.book_quantity}，当前库存:{current_quantity}），请重新盘点后再审核'
+                )
 
     inventory_check.status = status
     if audit_opinion is not None:
@@ -142,6 +197,9 @@ def cancel_inventory_check(
 
 
 def load_book_quantities(zone: Zone, floor: Floor | None = None) -> list[dict]:
+    if floor and floor.project_id != zone.project_id:
+        raise ValidationError('所选楼层不属于该分区所在的项目')
+
     all_zone_ids = zone.get_all_child_ids()
     stocks = MaterialStock.objects.filter(zone_id__in=all_zone_ids)
     if floor:
