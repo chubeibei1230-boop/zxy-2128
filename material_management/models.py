@@ -284,3 +284,70 @@ class ExceptionRecord(models.Model):
 
     def __str__(self):
         return self.exception_no
+
+
+class InventoryCheck(models.Model):
+    STATUS_CHOICES = (
+        ('draft', '草稿'),
+        ('submitted', '待审核'),
+        ('approved', '审核通过'),
+        ('rejected', '审核拒绝'),
+        ('cancelled', '已取消'),
+    )
+    check_no = models.CharField(max_length=100, unique=True, verbose_name='盘点单号')
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='inventory_checks', verbose_name='所属项目')
+    zone = models.ForeignKey(Zone, on_delete=models.CASCADE, related_name='inventory_checks', verbose_name='盘点分区')
+    floor = models.ForeignKey(Floor, on_delete=models.SET_NULL, null=True, blank=True, related_name='inventory_checks', verbose_name='盘点楼层')
+    check_range = models.TextField(blank=True, null=True, verbose_name='盘点范围说明')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft', verbose_name='状态')
+    handling_opinion = models.TextField(blank=True, null=True, verbose_name='处理意见')
+    audit_opinion = models.TextField(blank=True, null=True, verbose_name='审核意见')
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='created_inventory_checks', verbose_name='盘点人')
+    checked_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='checked_inventory_checks', verbose_name='复盘人')
+    audited_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='audited_inventory_checks', verbose_name='审核人')
+    check_date = models.DateField(verbose_name='盘点日期')
+    created_at = models.DateTimeField(auto_now_add=True)
+    checked_at = models.DateTimeField(null=True, blank=True)
+    audited_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'inventory_check'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.check_no
+
+
+class InventoryCheckItem(models.Model):
+    DIFF_TYPE_CHOICES = (
+        ('no_diff', '无差异'),
+        ('overage', '盘盈'),
+        ('shortage', '盘亏'),
+    )
+    inventory_check = models.ForeignKey(InventoryCheck, on_delete=models.CASCADE, related_name='items', verbose_name='关联盘点单')
+    material_category = models.ForeignKey(MaterialCategory, on_delete=models.CASCADE, related_name='inventory_check_items', verbose_name='材料类别')
+    material_batch = models.ForeignKey(MaterialBatch, on_delete=models.CASCADE, related_name='inventory_check_items', verbose_name='材料批次')
+    book_quantity = models.DecimalField(max_digits=15, decimal_places=2, verbose_name='账面数量')
+    actual_quantity = models.DecimalField(max_digits=15, decimal_places=2, verbose_name='实盘数量')
+    diff_quantity = models.DecimalField(max_digits=15, decimal_places=2, default=0, verbose_name='差异数量')
+    diff_type = models.CharField(max_length=20, choices=DIFF_TYPE_CHOICES, default='no_diff', verbose_name='差异类型')
+    remark = models.TextField(blank=True, null=True, verbose_name='备注')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'inventory_check_item'
+        ordering = ['id']
+
+    def __str__(self):
+        return f'{self.inventory_check.check_no} - {self.material_category.name}'
+
+    def save(self, *args, **kwargs):
+        self.diff_quantity = self.actual_quantity - self.book_quantity
+        if self.diff_quantity > 0:
+            self.diff_type = 'overage'
+        elif self.diff_quantity < 0:
+            self.diff_type = 'shortage'
+        else:
+            self.diff_type = 'no_diff'
+        super().save(*args, **kwargs)

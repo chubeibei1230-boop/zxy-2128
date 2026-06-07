@@ -27,6 +27,14 @@ from .exception_service import (
     audit_exception_record,
     resolve_exception_record,
 )
+from .inventory_check_service import (
+    create_inventory_check,
+    update_inventory_check_items,
+    submit_inventory_check,
+    audit_inventory_check,
+    cancel_inventory_check,
+    load_book_quantities,
+)
 
 __all__ = [
     'calculate_zone_level',
@@ -48,4 +56,10 @@ __all__ = [
     'create_exception_record',
     'audit_exception_record',
     'resolve_exception_record',
+    'create_inventory_check',
+    'update_inventory_check_items',
+    'submit_inventory_check',
+    'audit_inventory_check',
+    'cancel_inventory_check',
+    'load_book_quantities',
 ]

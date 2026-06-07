@@ -12,7 +12,8 @@ from django.core.exceptions import ValidationError
 from .models import (
     UserProfile, Project, MaterialCategory, Zone, Floor,
     ResponsibilityGroup, MaterialBatch, MaterialStock,
-    MaterialTransfer, MaterialUsage, ExceptionRecord
+    MaterialTransfer, MaterialUsage, ExceptionRecord,
+    InventoryCheck, InventoryCheckItem
 )
 from .serializers import (
     UserProfileSerializer, UserCreateSerializer,
@@ -24,7 +25,11 @@ from .serializers import (
     MaterialStockSerializer,
     MaterialTransferSerializer,
     MaterialUsageSerializer,
-    ExceptionRecordSerializer, AuditExceptionSerializer
+    ExceptionRecordSerializer, AuditExceptionSerializer,
+    InventoryCheckSerializer, InventoryCheckDetailSerializer,
+    InventoryCheckCreateSerializer,
+    InventoryCheckUpdateItemsSerializer,
+    AuditInventoryCheckSerializer
 )
 from .permissions import IsAdmin, IsOperator, IsAuditor, IsAdminOrOperator, IsAdminOrAuditor
 from .selectors import (
@@ -44,6 +49,9 @@ from .selectors import (
     get_exception_record_queryset,
     get_dashboard_stats,
     get_or_create_current_user_profile,
+    get_inventory_check_queryset,
+    get_inventory_check_item_queryset,
+    get_zone_stocks_for_inventory,
 )
 from .services import (
     calculate_zone_level,
@@ -63,6 +71,12 @@ from .services import (
     create_exception_record,
     audit_exception_record,
     resolve_exception_record,
+    create_inventory_check,
+    update_inventory_check_items,
+    submit_inventory_check,
+    audit_inventory_check,
+    cancel_inventory_check,
+    load_book_quantities,
 )
 
 
@@ -512,3 +526,117 @@ class DashboardView(APIView):
         project_id = request.query_params.get('project')
         stats = get_dashboard_stats(project_id)
         return Response(stats)
+
+
+class InventoryCheckViewSet(viewsets.ModelViewSet):
+    queryset = InventoryCheck.objects.all()
+    serializer_class = InventoryCheckSerializer
+
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'partial_update', 'destroy', 'update_items', 'submit', 'cancel']:
+            permission_classes = [IsAdminOrOperator]
+        elif self.action in ['audit']:
+            permission_classes = [IsAdminOrAuditor]
+        else:
+            permission_classes = [permissions.IsAuthenticated]
+        return [permission() for permission in permission_classes]
+
+    def get_queryset(self):
+        project = self.request.query_params.get('project')
+        zone = self.request.query_params.get('zone')
+        status_filter = self.request.query_params.get('status')
+        return get_inventory_check_queryset(
+            self.request,
+            project=project,
+            zone=zone,
+            status=status_filter
+        )
+
+    def get_serializer_class(self):
+        if self.action == 'retrieve':
+            return InventoryCheckDetailSerializer
+        return InventoryCheckSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = InventoryCheckCreateSerializer(data=request.data)
+        if serializer.is_valid():
+            inventory_check = create_inventory_check(serializer.validated_data, request.user)
+            return Response(InventoryCheckSerializer(inventory_check).data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdminOrOperator])
+    def update_items(self, request, pk=None):
+        inventory_check = self.get_object()
+        serializer = InventoryCheckUpdateItemsSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = serializer.validated_data
+        try:
+            updated_check = update_inventory_check_items(
+                inventory_check,
+                data['items']
+            )
+            return Response(InventoryCheckDetailSerializer(updated_check).data)
+        except ValidationError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdminOrOperator])
+    def submit(self, request, pk=None):
+        inventory_check = self.get_object()
+        try:
+            submitted_check = submit_inventory_check(
+                inventory_check,
+                request.user,
+                handling_opinion=request.data.get('handling_opinion')
+            )
+            return Response(InventoryCheckDetailSerializer(submitted_check).data)
+        except ValidationError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdminOrAuditor])
+    def audit(self, request, pk=None):
+        inventory_check = self.get_object()
+        serializer = AuditInventoryCheckSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = serializer.validated_data
+        try:
+            audited_check = audit_inventory_check(
+                inventory_check,
+                request.user,
+                status=data['status'],
+                audit_opinion=data.get('audit_opinion')
+            )
+            return Response(InventoryCheckDetailSerializer(audited_check).data)
+        except ValidationError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdminOrOperator])
+    def cancel(self, request, pk=None):
+        inventory_check = self.get_object()
+        try:
+            cancelled_check = cancel_inventory_check(
+                inventory_check,
+                request.user
+            )
+            return Response(InventoryCheckDetailSerializer(cancelled_check).data)
+        except ValidationError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=False, methods=['get'])
+    def load_books(self, request):
+        zone_id = request.query_params.get('zone')
+        floor_id = request.query_params.get('floor')
+        if not zone_id:
+            return Response({'error': '请指定分区ID'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            zone = Zone.objects.get(id=zone_id)
+            floor = None
+            if floor_id:
+                floor = Floor.objects.get(id=floor_id)
+            book_quantities = load_book_quantities(zone, floor)
+            return Response(book_quantities)
+        except Zone.DoesNotExist:
+            return Response({'error': '分区不存在'}, status=status.HTTP_404_NOT_FOUND)
+        except Floor.DoesNotExist:
+            return Response({'error': '楼层不存在'}, status=status.HTTP_404_NOT_FOUND)

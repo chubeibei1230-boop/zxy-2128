@@ -7,7 +7,7 @@ from .views import (
     ProjectViewSet, MaterialCategoryViewSet, ZoneViewSet,
     FloorViewSet, ResponsibilityGroupViewSet, MaterialBatchViewSet,
     MaterialStockViewSet, MaterialTransferViewSet, MaterialUsageViewSet,
-    ExceptionRecordViewSet, DashboardView
+    ExceptionRecordViewSet, DashboardView, InventoryCheckViewSet
 )
 
 router = DefaultRouter()
@@ -22,6 +22,7 @@ router.register(r'material-stocks', MaterialStockViewSet)
 router.register(r'material-transfers', MaterialTransferViewSet)
 router.register(r'material-usages', MaterialUsageViewSet)
 router.register(r'exception-records', ExceptionRecordViewSet)
+router.register(r'inventory-checks', InventoryCheckViewSet)
 
 urlpatterns = [
     path('', include(router.urls)),

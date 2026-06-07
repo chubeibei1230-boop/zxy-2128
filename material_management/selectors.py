@@ -9,7 +9,8 @@ from django.contrib.auth.models import User
 from .models import (
     UserProfile, Project, MaterialCategory, Zone, Floor,
     ResponsibilityGroup, MaterialBatch, MaterialStock,
-    MaterialTransfer, MaterialUsage, ExceptionRecord
+    MaterialTransfer, MaterialUsage, ExceptionRecord,
+    InventoryCheck, InventoryCheckItem
 )
 from .utils import parse_bool_param
 
@@ -232,16 +233,68 @@ def get_dashboard_stats(project_id: str | None = None) -> dict:
     transfer_params = {k.replace('project_id', 'from_zone__project_id'): v for k, v in zone_params.items()}
     pending_transfer = MaterialTransfer.objects.filter(**transfer_params, status='pending').count()
 
+    inventory_params = {k.replace('project_id', 'project_id'): v for k, v in zone_params.items()}
+    pending_inventory_check = InventoryCheck.objects.filter(**inventory_params, status='submitted').count()
+    total_inventory_check = InventoryCheck.objects.filter(**inventory_params).count()
+
     return {
         'total_projects': total_projects,
         'total_zones': total_zones,
         'total_stock': total_stock,
         'pending_usage': pending_usage,
         'pending_exception': pending_exception,
-        'pending_transfer': pending_transfer
+        'pending_transfer': pending_transfer,
+        'pending_inventory_check': pending_inventory_check,
+        'total_inventory_check': total_inventory_check
     }
 
 
 def get_or_create_current_user_profile(user: User) -> UserProfile:
     profile, _ = UserProfile.objects.get_or_create(user=user, defaults={'role': 'operator'})
     return profile
+
+
+def get_inventory_check_queryset(
+    request,
+    project: str | None = None,
+    zone: str | None = None,
+    status: str | None = None
+) -> QuerySet:
+    queryset = InventoryCheck.objects.select_related(
+        'project', 'zone', 'floor',
+        'created_by', 'checked_by', 'audited_by'
+    ).prefetch_related('items').all()
+    if project:
+        queryset = queryset.filter(project_id=project)
+    if zone:
+        try:
+            zone_obj = Zone.objects.get(id=zone)
+            all_zone_ids = zone_obj.get_all_child_ids()
+            queryset = queryset.filter(zone_id__in=all_zone_ids)
+        except Zone.DoesNotExist:
+            queryset = queryset.none()
+    if status:
+        queryset = queryset.filter(status=status)
+    return queryset
+
+
+def get_inventory_check_item_queryset(
+    request,
+    inventory_check: str | None = None
+) -> QuerySet:
+    queryset = InventoryCheckItem.objects.select_related(
+        'inventory_check', 'material_category', 'material_batch'
+    ).all()
+    if inventory_check:
+        queryset = queryset.filter(inventory_check_id=inventory_check)
+    return queryset
+
+
+def get_zone_stocks_for_inventory(zone: Zone, floor: Floor | None = None) -> QuerySet:
+    all_zone_ids = zone.get_all_child_ids()
+    queryset = MaterialStock.objects.filter(zone_id__in=all_zone_ids).select_related(
+        'zone', 'material_category', 'material_batch', 'floor'
+    )
+    if floor:
+        queryset = queryset.filter(floor=floor)
+    return queryset

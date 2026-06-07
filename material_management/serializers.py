@@ -3,7 +3,8 @@ from django.contrib.auth.models import User
 from .models import (
     UserProfile, Project, MaterialCategory, Zone, Floor,
     ResponsibilityGroup, MaterialBatch, MaterialStock,
-    MaterialTransfer, MaterialUsage, ExceptionRecord
+    MaterialTransfer, MaterialUsage, ExceptionRecord,
+    InventoryCheck, InventoryCheckItem
 )
 
 
@@ -236,3 +237,72 @@ class AuditExceptionSerializer(serializers.Serializer):
 class ZoneMergeSerializer(serializers.Serializer):
     source_zone_ids = serializers.ListField(child=serializers.IntegerField())
     target_zone_id = serializers.IntegerField()
+
+
+class InventoryCheckItemSerializer(serializers.ModelSerializer):
+    material_category_name = serializers.CharField(source='material_category.name', read_only=True)
+    material_category_code = serializers.CharField(source='material_category.code', read_only=True)
+    material_batch_no = serializers.CharField(source='material_batch.batch_no', read_only=True)
+    diff_type_display = serializers.CharField(source='get_diff_type_display', read_only=True)
+
+    class Meta:
+        model = InventoryCheckItem
+        fields = '__all__'
+        read_only_fields = ['id', 'created_at', 'diff_quantity', 'diff_type']
+
+
+class InventoryCheckSerializer(serializers.ModelSerializer):
+    project_name = serializers.CharField(source='project.name', read_only=True)
+    zone_name = serializers.CharField(source='zone.name', read_only=True)
+    floor_name = serializers.CharField(source='floor.name', read_only=True, allow_null=True)
+    created_by_name = serializers.CharField(source='created_by.username', read_only=True, allow_null=True)
+    checked_by_name = serializers.CharField(source='checked_by.username', read_only=True, allow_null=True)
+    audited_by_name = serializers.CharField(source='audited_by.username', read_only=True, allow_null=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    items = InventoryCheckItemSerializer(many=True, required=False)
+
+    class Meta:
+        model = InventoryCheck
+        fields = '__all__'
+        read_only_fields = ['id', 'check_no', 'created_at', 'checked_at', 'audited_at', 'updated_at', 'status']
+
+
+class InventoryCheckDetailSerializer(serializers.ModelSerializer):
+    project_name = serializers.CharField(source='project.name', read_only=True)
+    zone_name = serializers.CharField(source='zone.name', read_only=True)
+    floor_name = serializers.CharField(source='floor.name', read_only=True, allow_null=True)
+    created_by_name = serializers.CharField(source='created_by.username', read_only=True, allow_null=True)
+    checked_by_name = serializers.CharField(source='checked_by.username', read_only=True, allow_null=True)
+    audited_by_name = serializers.CharField(source='audited_by.username', read_only=True, allow_null=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    items = InventoryCheckItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = InventoryCheck
+        fields = '__all__'
+        read_only_fields = ['id', 'check_no', 'created_at', 'checked_at', 'audited_at', 'updated_at']
+
+
+class InventoryCheckCreateSerializer(serializers.Serializer):
+    project = serializers.IntegerField()
+    zone = serializers.IntegerField()
+    floor = serializers.IntegerField(required=False, allow_null=True)
+    check_range = serializers.CharField(required=False, allow_blank=True)
+    check_date = serializers.DateField()
+
+
+class InventoryCheckItemCreateSerializer(serializers.Serializer):
+    material_category = serializers.IntegerField()
+    material_batch = serializers.IntegerField()
+    book_quantity = serializers.DecimalField(max_digits=15, decimal_places=2)
+    actual_quantity = serializers.DecimalField(max_digits=15, decimal_places=2)
+    remark = serializers.CharField(required=False, allow_blank=True)
+
+
+class InventoryCheckUpdateItemsSerializer(serializers.Serializer):
+    items = InventoryCheckItemCreateSerializer(many=True)
+
+
+class AuditInventoryCheckSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=['approved', 'rejected'])
+    audit_opinion = serializers.CharField(required=False, allow_blank=True)
