@@ -8,7 +8,7 @@ from .views import (
     FloorViewSet, ResponsibilityGroupViewSet, MaterialBatchViewSet,
     MaterialStockViewSet, MaterialTransferViewSet, MaterialUsageViewSet,
     ExceptionRecordViewSet, DashboardView, InventoryCheckViewSet,
-    MaterialWarningViewSet, WarningDashboardView
+    MaterialWarningViewSet, WarningDashboardView, WarningClosureCenterView
 )
 
 router = DefaultRouter()
@@ -32,4 +32,5 @@ urlpatterns = [
     path('auth/current-user/', current_user, name='current_user'),
     path('dashboard/', DashboardView.as_view(), name='dashboard'),
     path('warning-dashboard/', WarningDashboardView.as_view(), name='warning_dashboard'),
+    path('warning-closure-center/', WarningClosureCenterView.as_view(), name='warning_closure_center'),
 ]

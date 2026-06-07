@@ -427,3 +427,39 @@ class MaterialWarning(models.Model):
             'ignored': ignored,
             'completion_rate': round((processed + ignored) / total * 100, 2) if total > 0 else 0
         }
+
+
+class WarningProcessLog(models.Model):
+    ACTION_CHOICES = (
+        ('create', '创建预警'),
+        ('assign', '指派责任人'),
+        ('start_process', '开始处理'),
+        ('update_opinion', '更新处理意见'),
+        ('relate_usage', '关联领用单'),
+        ('relate_exception', '关联异常单'),
+        ('relate_inventory', '关联盘点单'),
+        ('auto_close', '自动闭环'),
+        ('auto_reopen', '自动恢复待处理'),
+        ('process', '标记已处理'),
+        ('force_close', '强制关闭'),
+        ('ignore', '忽略'),
+        ('reopen', '重新打开'),
+    )
+    warning = models.ForeignKey(MaterialWarning, on_delete=models.CASCADE, related_name='process_logs', verbose_name='关联预警')
+    action = models.CharField(max_length=50, choices=ACTION_CHOICES, verbose_name='操作类型')
+    action_detail = models.TextField(blank=True, null=True, verbose_name='操作详情')
+    old_status = models.CharField(max_length=20, blank=True, null=True, verbose_name='变更前状态')
+    new_status = models.CharField(max_length=20, blank=True, null=True, verbose_name='变更后状态')
+    remark = models.TextField(blank=True, null=True, verbose_name='备注')
+    related_usage = models.ForeignKey(MaterialUsage, on_delete=models.SET_NULL, null=True, blank=True, verbose_name='关联领用单')
+    related_exception = models.ForeignKey(ExceptionRecord, on_delete=models.SET_NULL, null=True, blank=True, verbose_name='关联异常单')
+    related_inventory_check = models.ForeignKey(InventoryCheck, on_delete=models.SET_NULL, null=True, blank=True, verbose_name='关联盘点单')
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='warning_logs', verbose_name='操作人')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='操作时间')
+
+    class Meta:
+        db_table = 'warning_process_log'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.warning.warning_no} - {self.get_action_display()}'

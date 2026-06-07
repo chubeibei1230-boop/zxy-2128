@@ -31,7 +31,10 @@ from .serializers import (
     InventoryCheckUpdateItemsSerializer,
     AuditInventoryCheckSerializer,
     MaterialWarningSerializer, WarningProcessSerializer,
-    WarningReopenSerializer, WarningDetectSerializer
+    WarningReopenSerializer, WarningDetectSerializer,
+    WarningClosureDetailSerializer, WarningProcessLogSerializer,
+    AssignResponsiblePersonSerializer, RelateDocumentSerializer,
+    BatchOperationSerializer, AutoClosureCheckSerializer
 )
 from .permissions import IsAdmin, IsOperator, IsAuditor, IsAdminOrOperator, IsAdminOrAuditor
 from .selectors import (
@@ -88,6 +91,13 @@ from .services.warning_service import (
     ignore_warning,
     reopen_warning,
     get_warning_statistics,
+)
+from .services.warning_closure_service import (
+    assign_responsible_person,
+    relate_business_document,
+    run_auto_closure_check,
+    get_warning_closure_overview,
+    get_related_documents_for_warning,
 )
 
 
@@ -667,6 +677,7 @@ class MaterialWarningViewSet(viewsets.ReadOnlyModelViewSet):
         status_filter = self.request.query_params.get('status')
         warning_type = self.request.query_params.get('warning_type')
         priority = self.request.query_params.get('priority')
+        responsible_person = self.request.query_params.get('responsible_person')
         return get_material_warning_queryset(
             self.request,
             project=project,
@@ -674,8 +685,14 @@ class MaterialWarningViewSet(viewsets.ReadOnlyModelViewSet):
             material_category=material_category,
             status=status_filter,
             warning_type=warning_type,
-            priority=priority
+            priority=priority,
+            responsible_person=responsible_person
         )
+
+    def get_serializer_class(self):
+        if self.action == 'retrieve':
+            return WarningClosureDetailSerializer
+        return MaterialWarningSerializer
 
     @action(detail=False, methods=['post'], permission_classes=[IsAdminOrOperator])
     def detect(self, request):
@@ -706,7 +723,7 @@ class MaterialWarningViewSet(viewsets.ReadOnlyModelViewSet):
                 handling_opinion=data.get('handling_opinion'),
                 responsible_person_id=data.get('responsible_person')
             )
-            return Response(MaterialWarningSerializer(updated_warning).data)
+            return Response(WarningClosureDetailSerializer(updated_warning).data)
         except ValidationError as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -735,7 +752,7 @@ class MaterialWarningViewSet(viewsets.ReadOnlyModelViewSet):
                 related_exception_id=data.get('related_exception'),
                 related_inventory_check_id=data.get('related_inventory_check')
             )
-            return Response(MaterialWarningSerializer(updated_warning).data)
+            return Response(WarningClosureDetailSerializer(updated_warning).data)
         except ValidationError as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -752,7 +769,7 @@ class MaterialWarningViewSet(viewsets.ReadOnlyModelViewSet):
                 request.user,
                 handling_opinion=data.get('handling_opinion')
             )
-            return Response(MaterialWarningSerializer(updated_warning).data)
+            return Response(WarningClosureDetailSerializer(updated_warning).data)
         except ValidationError as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -769,7 +786,7 @@ class MaterialWarningViewSet(viewsets.ReadOnlyModelViewSet):
                 request.user,
                 handling_opinion=data.get('handling_opinion')
             )
-            return Response(MaterialWarningSerializer(updated_warning).data)
+            return Response(WarningClosureDetailSerializer(updated_warning).data)
         except ValidationError as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -778,6 +795,165 @@ class MaterialWarningViewSet(viewsets.ReadOnlyModelViewSet):
         project_id = request.query_params.get('project')
         stats = get_warning_statistics(project_id)
         return Response(stats)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdminOrOperator])
+    def assign(self, request, pk=None):
+        warning = self.get_object()
+        serializer = AssignResponsiblePersonSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = serializer.validated_data
+        try:
+            updated_warning = assign_responsible_person(
+                warning,
+                request.user,
+                responsible_person_id=data['responsible_person'],
+                remark=data.get('remark')
+            )
+            return Response(WarningClosureDetailSerializer(updated_warning).data)
+        except ValidationError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdminOrOperator])
+    def relate_document(self, request, pk=None):
+        warning = self.get_object()
+        serializer = RelateDocumentSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = serializer.validated_data
+        try:
+            updated_warning = relate_business_document(
+                warning,
+                request.user,
+                doc_type=data['doc_type'],
+                doc_id=data['doc_id'],
+                remark=data.get('remark')
+            )
+            return Response(WarningClosureDetailSerializer(updated_warning).data)
+        except ValidationError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['get'])
+    def related_documents(self, request, pk=None):
+        warning = self.get_object()
+        docs = get_related_documents_for_warning(warning)
+        return Response(docs)
+
+    @action(detail=True, methods=['get'])
+    def process_logs(self, request, pk=None):
+        warning = self.get_object()
+        logs = warning.process_logs.all()
+        serializer = WarningProcessLogSerializer(logs, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['post'], permission_classes=[IsAdminOrOperator])
+    def batch_operation(self, request):
+        serializer = BatchOperationSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = serializer.validated_data
+        warning_ids = data['warning_ids']
+        operation = data['operation']
+        
+        success_count = 0
+        failed = []
+        warnings = MaterialWarning.objects.filter(id__in=warning_ids)
+        
+        for warning in warnings:
+            try:
+                if operation == 'assign' and data.get('responsible_person'):
+                    assign_responsible_person(
+                        warning,
+                        request.user,
+                        responsible_person_id=data['responsible_person'],
+                        remark=data.get('handling_opinion')
+                    )
+                elif operation == 'start_process':
+                    start_processing_warning(
+                        warning,
+                        request.user,
+                        handling_opinion=data.get('handling_opinion')
+                    )
+                elif operation == 'ignore' and IsAdminOrAuditor().has_permission(request, self):
+                    ignore_warning(
+                        warning,
+                        request.user,
+                        handling_opinion=data.get('handling_opinion')
+                    )
+                success_count += 1
+            except ValidationError as e:
+                failed.append({
+                    'warning_id': warning.id,
+                    'warning_no': warning.warning_no,
+                    'error': str(e)
+                })
+        
+        return Response({
+            'success_count': success_count,
+            'failed_count': len(failed),
+            'failed': failed
+        })
+
+    @action(detail=False, methods=['post'], permission_classes=[IsAdminOrOperator])
+    def auto_closure_check(self, request):
+        serializer = AutoClosureCheckSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = serializer.validated_data
+        project_id = data.get('project')
+        auto_execute = data.get('auto_execute', False)
+        
+        if auto_execute:
+            result = run_auto_closure_check(project_id)
+            return Response({
+                'message': '自动闭环检测执行完成',
+                **result
+            })
+        else:
+            warnings = MaterialWarning.objects.all()
+            if project_id:
+                warnings = warnings.filter(project_id=project_id)
+            
+            can_close_list = []
+            need_reopen_list = []
+            
+            for warning in warnings.filter(status__in=['pending', 'processing']):
+                from .services.warning_closure_service import check_warning_auto_closure
+                can_close, reason = check_warning_auto_closure(warning)
+                if can_close:
+                    can_close_list.append({
+                        'warning_id': warning.id,
+                        'warning_no': warning.warning_no,
+                        'warning_type': warning.warning_type,
+                        'reason': reason
+                    })
+            
+            for warning in warnings.filter(status__in=['processed', 'ignored']):
+                from .services.warning_closure_service import check_warning_auto_reopen
+                need_reopen, reason = check_warning_auto_reopen(warning)
+                if need_reopen:
+                    need_reopen_list.append({
+                        'warning_id': warning.id,
+                        'warning_no': warning.warning_no,
+                        'warning_type': warning.warning_type,
+                        'reason': reason
+                    })
+            
+            return Response({
+                'can_auto_close_count': len(can_close_list),
+                'can_auto_close': can_close_list,
+                'need_reopen_count': len(need_reopen_list),
+                'need_reopen': need_reopen_list
+            })
+
+
+class WarningClosureCenterView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        project_id = request.query_params.get('project')
+        overview = get_warning_closure_overview(project_id)
+        return Response(overview)
 
 
 class WarningDashboardView(APIView):

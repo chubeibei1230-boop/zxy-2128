@@ -2,7 +2,8 @@ from django.contrib import admin
 from .models import (
     UserProfile, Project, MaterialCategory, Zone, Floor,
     ResponsibilityGroup, MaterialBatch, MaterialStock,
-    MaterialTransfer, MaterialUsage, ExceptionRecord
+    MaterialTransfer, MaterialUsage, ExceptionRecord,
+    InventoryCheck, InventoryCheckItem, MaterialWarning, WarningProcessLog
 )
 
 
@@ -81,3 +82,24 @@ class ExceptionRecordAdmin(admin.ModelAdmin):
     list_display = ['exception_no', 'project', 'zone', 'material_category', 'exception_type', 'status', 'created_at']
     list_filter = ['project', 'exception_type', 'status', 'zone']
     search_fields = ['exception_no', 'description']
+
+
+@admin.register(InventoryCheck)
+class InventoryCheckAdmin(admin.ModelAdmin):
+    list_display = ['check_no', 'project', 'zone', 'check_date', 'status', 'created_at']
+    list_filter = ['project', 'status', 'zone']
+    search_fields = ['check_no']
+
+
+@admin.register(MaterialWarning)
+class MaterialWarningAdmin(admin.ModelAdmin):
+    list_display = ['warning_no', 'project', 'zone', 'material_category', 'warning_type', 'priority', 'status', 'created_at']
+    list_filter = ['project', 'warning_type', 'status', 'priority', 'zone']
+    search_fields = ['warning_no', 'description']
+
+
+@admin.register(WarningProcessLog)
+class WarningProcessLogAdmin(admin.ModelAdmin):
+    list_display = ['warning', 'action', 'old_status', 'new_status', 'created_by', 'created_at']
+    list_filter = ['action', 'old_status', 'new_status']
+    search_fields = ['warning__warning_no', 'action_detail']

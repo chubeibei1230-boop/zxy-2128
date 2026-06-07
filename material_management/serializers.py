@@ -4,7 +4,8 @@ from .models import (
     UserProfile, Project, MaterialCategory, Zone, Floor,
     ResponsibilityGroup, MaterialBatch, MaterialStock,
     MaterialTransfer, MaterialUsage, ExceptionRecord,
-    InventoryCheck, InventoryCheckItem, MaterialWarning
+    InventoryCheck, InventoryCheckItem, MaterialWarning,
+    WarningProcessLog
 )
 
 
@@ -345,3 +346,103 @@ class WarningReopenSerializer(serializers.Serializer):
 
 class WarningDetectSerializer(serializers.Serializer):
     project = serializers.IntegerField(required=False, allow_null=True)
+
+
+class WarningProcessLogSerializer(serializers.ModelSerializer):
+    action_display = serializers.CharField(source='get_action_display', read_only=True)
+    created_by_name = serializers.CharField(source='created_by.username', read_only=True, allow_null=True)
+    related_usage_no = serializers.CharField(source='related_usage.usage_no', read_only=True, allow_null=True)
+    related_exception_no = serializers.CharField(source='related_exception.exception_no', read_only=True, allow_null=True)
+    related_inventory_check_no = serializers.CharField(source='related_inventory_check.check_no', read_only=True, allow_null=True)
+
+    class Meta:
+        model = WarningProcessLog
+        fields = '__all__'
+        read_only_fields = ['id', 'created_at']
+
+
+class WarningClosureDetailSerializer(serializers.ModelSerializer):
+    project_name = serializers.CharField(source='project.name', read_only=True)
+    zone_name = serializers.CharField(source='zone.name', read_only=True)
+    zone_code = serializers.CharField(source='zone.code', read_only=True)
+    floor_name = serializers.CharField(source='floor.name', read_only=True, allow_null=True)
+    material_category_name = serializers.CharField(source='material_category.name', read_only=True)
+    material_category_code = serializers.CharField(source='material_category.code', read_only=True)
+    material_batch_no = serializers.CharField(source='material_batch.batch_no', read_only=True)
+    warning_type_display = serializers.CharField(source='get_warning_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    priority_display = serializers.CharField(source='get_priority_display', read_only=True)
+    responsible_person_name = serializers.CharField(source='responsible_person.username', read_only=True, allow_null=True)
+    created_by_name = serializers.CharField(source='created_by.username', read_only=True, allow_null=True)
+    handled_by_name = serializers.CharField(source='handled_by.username', read_only=True, allow_null=True)
+    process_logs = WarningProcessLogSerializer(many=True, read_only=True)
+    related_usage_info = serializers.SerializerMethodField()
+    related_exception_info = serializers.SerializerMethodField()
+    related_inventory_check_info = serializers.SerializerMethodField()
+    auto_closure_check = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MaterialWarning
+        fields = '__all__'
+        read_only_fields = ['id', 'warning_no', 'created_at', 'handled_at', 'updated_at', 'process_logs']
+
+    def get_related_usage_info(self, obj):
+        if obj.related_usage:
+            return {
+                'id': obj.related_usage.id,
+                'usage_no': obj.related_usage.usage_no,
+                'status': obj.related_usage.status,
+                'status_display': obj.related_usage.get_status_display()
+            }
+        return None
+
+    def get_related_exception_info(self, obj):
+        if obj.related_exception:
+            return {
+                'id': obj.related_exception.id,
+                'exception_no': obj.related_exception.exception_no,
+                'status': obj.related_exception.status,
+                'status_display': obj.related_exception.get_status_display()
+            }
+        return None
+
+    def get_related_inventory_check_info(self, obj):
+        if obj.related_inventory_check:
+            return {
+                'id': obj.related_inventory_check.id,
+                'check_no': obj.related_inventory_check.check_no,
+                'status': obj.related_inventory_check.status,
+                'status_display': obj.related_inventory_check.get_status_display()
+            }
+        return None
+
+    def get_auto_closure_check(self, obj):
+        from .services.warning_closure_service import check_warning_auto_closure
+        can_close, reason = check_warning_auto_closure(obj)
+        return {
+            'can_auto_close': can_close,
+            'reason': reason
+        }
+
+
+class AssignResponsiblePersonSerializer(serializers.Serializer):
+    responsible_person = serializers.IntegerField()
+    remark = serializers.CharField(required=False, allow_blank=True)
+
+
+class RelateDocumentSerializer(serializers.Serializer):
+    doc_type = serializers.ChoiceField(choices=['usage', 'exception', 'inventory'])
+    doc_id = serializers.IntegerField()
+    remark = serializers.CharField(required=False, allow_blank=True)
+
+
+class BatchOperationSerializer(serializers.Serializer):
+    warning_ids = serializers.ListField(child=serializers.IntegerField())
+    operation = serializers.ChoiceField(choices=['assign', 'start_process', 'ignore'])
+    responsible_person = serializers.IntegerField(required=False, allow_null=True)
+    handling_opinion = serializers.CharField(required=False, allow_blank=True)
+
+
+class AutoClosureCheckSerializer(serializers.Serializer):
+    project = serializers.IntegerField(required=False, allow_null=True)
+    auto_execute = serializers.BooleanField(required=False, default=False)

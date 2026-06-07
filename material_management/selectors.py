@@ -315,13 +315,14 @@ def get_material_warning_queryset(
     material_category: str | None = None,
     status: str | None = None,
     warning_type: str | None = None,
-    priority: str | None = None
+    priority: str | None = None,
+    responsible_person: str | None = None
 ) -> QuerySet:
     queryset = MaterialWarning.objects.select_related(
         'project', 'zone', 'floor', 'material_category',
         'material_batch', 'material_stock', 'responsible_person',
         'created_by', 'handled_by'
-    ).all()
+    ).prefetch_related('process_logs').all()
     if project:
         queryset = queryset.filter(project_id=project)
     if zone:
@@ -339,4 +340,9 @@ def get_material_warning_queryset(
         queryset = queryset.filter(warning_type=warning_type)
     if priority:
         queryset = queryset.filter(priority=priority)
+    if responsible_person:
+        if responsible_person == 'null':
+            queryset = queryset.filter(responsible_person__isnull=True)
+        else:
+            queryset = queryset.filter(responsible_person_id=responsible_person)
     return queryset

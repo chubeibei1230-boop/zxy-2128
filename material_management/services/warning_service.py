@@ -334,11 +334,11 @@ def start_processing_warning(warning: MaterialWarning, user: User,
     if warning.status != 'pending':
         raise ValidationError('只能处理待处理状态的预警')
     
+    old_status = warning.status
     warning.status = 'processing'
     if handling_opinion:
         warning.handling_opinion = handling_opinion
     if responsible_person_id:
-        from django.contrib.auth.models import User
         try:
             responsible_person = User.objects.get(id=responsible_person_id)
             warning.responsible_person = responsible_person
@@ -346,6 +346,21 @@ def start_processing_warning(warning: MaterialWarning, user: User,
             raise ValidationError('指定的责任人不存在')
     warning.handled_by = user
     warning.save()
+    
+    from .warning_closure_service import create_process_log
+    action_detail = '开始处理预警'
+    if responsible_person_id:
+        action_detail += f'，指派责任人：{warning.responsible_person.username}'
+    create_process_log(
+        warning=warning,
+        action='start_process',
+        user=user,
+        action_detail=action_detail,
+        old_status=old_status,
+        new_status='processing',
+        remark=handling_opinion
+    )
+    
     return warning
 
 
@@ -409,6 +424,7 @@ def process_warning(warning: MaterialWarning, user: User,
         if not problem_resolved:
             raise ValidationError(error_msg)
     
+    old_status = warning.status
     warning.status = 'processed'
     warning.handling_result = handling_result
     warning.force_close = force_close
@@ -416,34 +432,60 @@ def process_warning(warning: MaterialWarning, user: User,
     if handling_opinion:
         warning.handling_opinion = handling_opinion
     if responsible_person_id:
-        from django.contrib.auth.models import User
         try:
             responsible_person = User.objects.get(id=responsible_person_id)
             warning.responsible_person = responsible_person
         except User.DoesNotExist:
             raise ValidationError('指定的责任人不存在')
     
+    related_usage = None
+    related_exception = None
+    related_inventory_check = None
+    
     if related_usage_id:
         try:
-            warning.related_usage = MaterialUsage.objects.get(id=related_usage_id)
+            related_usage = MaterialUsage.objects.get(id=related_usage_id)
+            warning.related_usage = related_usage
         except MaterialUsage.DoesNotExist:
             raise ValidationError('关联的领用单不存在')
     
     if related_exception_id:
         try:
-            warning.related_exception = ExceptionRecord.objects.get(id=related_exception_id)
+            related_exception = ExceptionRecord.objects.get(id=related_exception_id)
+            warning.related_exception = related_exception
         except ExceptionRecord.DoesNotExist:
             raise ValidationError('关联的异常单不存在')
     
     if related_inventory_check_id:
         try:
-            warning.related_inventory_check = InventoryCheck.objects.get(id=related_inventory_check_id)
+            related_inventory_check = InventoryCheck.objects.get(id=related_inventory_check_id)
+            warning.related_inventory_check = related_inventory_check
         except InventoryCheck.DoesNotExist:
             raise ValidationError('关联的盘点单不存在')
     
     warning.handled_by = user
     warning.handled_at = timezone.now()
     warning.save()
+    
+    from .warning_closure_service import create_process_log
+    action = 'force_close' if force_close else 'process'
+    action_detail = '标记预警为已处理'
+    if force_close:
+        action_detail = '强制关闭预警'
+    
+    create_process_log(
+        warning=warning,
+        action=action,
+        user=user,
+        action_detail=action_detail,
+        old_status=old_status,
+        new_status='processed',
+        remark=handling_result,
+        related_usage=related_usage,
+        related_exception=related_exception,
+        related_inventory_check=related_inventory_check
+    )
+    
     return warning
 
 
@@ -453,12 +495,25 @@ def ignore_warning(warning: MaterialWarning, user: User,
     if warning.status not in ['pending', 'processing']:
         raise ValidationError('只能忽略待处理或处理中的预警')
     
+    old_status = warning.status
     warning.status = 'ignored'
     if handling_opinion:
         warning.handling_opinion = handling_opinion
     warning.handled_by = user
     warning.handled_at = timezone.now()
     warning.save()
+    
+    from .warning_closure_service import create_process_log
+    create_process_log(
+        warning=warning,
+        action='ignore',
+        user=user,
+        action_detail='忽略预警',
+        old_status=old_status,
+        new_status='ignored',
+        remark=handling_opinion
+    )
+    
     return warning
 
 
@@ -468,12 +523,25 @@ def reopen_warning(warning: MaterialWarning, user: User,
     if warning.status not in ['processed', 'ignored']:
         raise ValidationError('只能重新打开已处理或已忽略的预警')
     
+    old_status = warning.status
     warning.status = 'pending'
     if handling_opinion:
         warning.handling_opinion = handling_opinion
     warning.handled_by = None
     warning.handled_at = None
     warning.save()
+    
+    from .warning_closure_service import create_process_log
+    create_process_log(
+        warning=warning,
+        action='reopen',
+        user=user,
+        action_detail='重新打开预警',
+        old_status=old_status,
+        new_status='pending',
+        remark=handling_opinion
+    )
+    
     return warning
 
 
