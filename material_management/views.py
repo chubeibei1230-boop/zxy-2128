@@ -13,7 +13,7 @@ from .models import (
     UserProfile, Project, MaterialCategory, Zone, Floor,
     ResponsibilityGroup, MaterialBatch, MaterialStock,
     MaterialTransfer, MaterialUsage, ExceptionRecord,
-    InventoryCheck, InventoryCheckItem
+    InventoryCheck, InventoryCheckItem, MaterialWarning
 )
 from .serializers import (
     UserProfileSerializer, UserCreateSerializer,
@@ -29,7 +29,9 @@ from .serializers import (
     InventoryCheckSerializer, InventoryCheckDetailSerializer,
     InventoryCheckCreateSerializer,
     InventoryCheckUpdateItemsSerializer,
-    AuditInventoryCheckSerializer
+    AuditInventoryCheckSerializer,
+    MaterialWarningSerializer, WarningProcessSerializer,
+    WarningReopenSerializer, WarningDetectSerializer
 )
 from .permissions import IsAdmin, IsOperator, IsAuditor, IsAdminOrOperator, IsAdminOrAuditor
 from .selectors import (
@@ -52,6 +54,7 @@ from .selectors import (
     get_inventory_check_queryset,
     get_inventory_check_item_queryset,
     get_zone_stocks_for_inventory,
+    get_material_warning_queryset,
 )
 from .services import (
     calculate_zone_level,
@@ -77,6 +80,14 @@ from .services import (
     audit_inventory_check,
     cancel_inventory_check,
     load_book_quantities,
+)
+from .services.warning_service import (
+    run_warning_detection,
+    start_processing_warning,
+    process_warning,
+    ignore_warning,
+    reopen_warning,
+    get_warning_statistics,
 )
 
 
@@ -642,3 +653,133 @@ class InventoryCheckViewSet(viewsets.ModelViewSet):
             return Response({'error': '楼层不存在'}, status=status.HTTP_404_NOT_FOUND)
         except ValidationError as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class MaterialWarningViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = MaterialWarning.objects.all()
+    serializer_class = MaterialWarningSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        project = self.request.query_params.get('project')
+        zone = self.request.query_params.get('zone')
+        material_category = self.request.query_params.get('material_category')
+        status_filter = self.request.query_params.get('status')
+        warning_type = self.request.query_params.get('warning_type')
+        priority = self.request.query_params.get('priority')
+        return get_material_warning_queryset(
+            self.request,
+            project=project,
+            zone=zone,
+            material_category=material_category,
+            status=status_filter,
+            warning_type=warning_type,
+            priority=priority
+        )
+
+    @action(detail=False, methods=['post'], permission_classes=[IsAdminOrOperator])
+    def detect(self, request):
+        serializer = WarningDetectSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = serializer.validated_data
+        result = run_warning_detection(
+            project_id=data.get('project'),
+            user=request.user
+        )
+        return Response({
+            'message': '预警检测完成',
+            **result
+        })
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdminOrOperator])
+    def start_processing(self, request, pk=None):
+        warning = self.get_object()
+        serializer = WarningProcessSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = serializer.validated_data
+        try:
+            updated_warning = start_processing_warning(
+                warning,
+                request.user,
+                handling_opinion=data.get('handling_opinion'),
+                responsible_person_id=data.get('responsible_person')
+            )
+            return Response(MaterialWarningSerializer(updated_warning).data)
+        except ValidationError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdminOrOperator])
+    def process(self, request, pk=None):
+        warning = self.get_object()
+        serializer = WarningProcessSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = serializer.validated_data
+        if not data.get('handling_result'):
+            return Response({'error': '请填写处理结果'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            updated_warning = process_warning(
+                warning,
+                request.user,
+                handling_result=data['handling_result'],
+                handling_opinion=data.get('handling_opinion'),
+                responsible_person_id=data.get('responsible_person')
+            )
+            return Response(MaterialWarningSerializer(updated_warning).data)
+        except ValidationError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdminOrAuditor])
+    def ignore(self, request, pk=None):
+        warning = self.get_object()
+        serializer = WarningReopenSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = serializer.validated_data
+        try:
+            updated_warning = ignore_warning(
+                warning,
+                request.user,
+                handling_opinion=data.get('handling_opinion')
+            )
+            return Response(MaterialWarningSerializer(updated_warning).data)
+        except ValidationError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdminOrAuditor])
+    def reopen(self, request, pk=None):
+        warning = self.get_object()
+        serializer = WarningReopenSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = serializer.validated_data
+        try:
+            updated_warning = reopen_warning(
+                warning,
+                request.user,
+                handling_opinion=data.get('handling_opinion')
+            )
+            return Response(MaterialWarningSerializer(updated_warning).data)
+        except ValidationError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=False, methods=['get'])
+    def statistics(self, request):
+        project_id = request.query_params.get('project')
+        stats = get_warning_statistics(project_id)
+        return Response(stats)
+
+
+class WarningDashboardView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        project_id = request.query_params.get('project')
+        warning_stats = get_warning_statistics(project_id)
+        dashboard_stats = get_dashboard_stats(project_id)
+        return Response({
+            **dashboard_stats,
+            'warning_stats': warning_stats
+        })

@@ -4,7 +4,7 @@ from .models import (
     UserProfile, Project, MaterialCategory, Zone, Floor,
     ResponsibilityGroup, MaterialBatch, MaterialStock,
     MaterialTransfer, MaterialUsage, ExceptionRecord,
-    InventoryCheck, InventoryCheckItem
+    InventoryCheck, InventoryCheckItem, MaterialWarning
 )
 
 
@@ -306,3 +306,38 @@ class InventoryCheckUpdateItemsSerializer(serializers.Serializer):
 class AuditInventoryCheckSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=['approved', 'rejected'])
     audit_opinion = serializers.CharField(required=False, allow_blank=True)
+
+
+class MaterialWarningSerializer(serializers.ModelSerializer):
+    project_name = serializers.CharField(source='project.name', read_only=True)
+    zone_name = serializers.CharField(source='zone.name', read_only=True)
+    zone_code = serializers.CharField(source='zone.code', read_only=True)
+    floor_name = serializers.CharField(source='floor.name', read_only=True, allow_null=True)
+    material_category_name = serializers.CharField(source='material_category.name', read_only=True)
+    material_category_code = serializers.CharField(source='material_category.code', read_only=True)
+    material_batch_no = serializers.CharField(source='material_batch.batch_no', read_only=True)
+    warning_type_display = serializers.CharField(source='get_warning_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    priority_display = serializers.CharField(source='get_priority_display', read_only=True)
+    responsible_person_name = serializers.CharField(source='responsible_person.username', read_only=True, allow_null=True)
+    created_by_name = serializers.CharField(source='created_by.username', read_only=True, allow_null=True)
+    handled_by_name = serializers.CharField(source='handled_by.username', read_only=True, allow_null=True)
+
+    class Meta:
+        model = MaterialWarning
+        fields = '__all__'
+        read_only_fields = ['id', 'warning_no', 'created_at', 'handled_at', 'updated_at']
+
+
+class WarningProcessSerializer(serializers.Serializer):
+    handling_opinion = serializers.CharField(required=False, allow_blank=True)
+    handling_result = serializers.CharField(required=False, allow_blank=True)
+    responsible_person = serializers.IntegerField(required=False, allow_null=True)
+
+
+class WarningReopenSerializer(serializers.Serializer):
+    handling_opinion = serializers.CharField(required=False, allow_blank=True)
+
+
+class WarningDetectSerializer(serializers.Serializer):
+    project = serializers.IntegerField(required=False, allow_null=True)

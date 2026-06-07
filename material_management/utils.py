@@ -27,6 +27,10 @@ def generate_inventory_check_no() -> str:
     return f'CHECK{timezone.now().strftime("%Y%m%d%H%M%S")}{uuid.uuid4().hex[:4].upper()}'
 
 
+def generate_warning_no() -> str:
+    return f'WARN{timezone.now().strftime("%Y%m%d%H%M%S")}{uuid.uuid4().hex[:4].upper()}'
+
+
 def parse_bool_param(value: str) -> bool | None:
     if value is None:
         return None

@@ -4,6 +4,7 @@
 原则：业务逻辑下沉，事务控制在此层，处理库存流转
 """
 from django.db import transaction
+from django.utils import timezone
 from django.contrib.auth.models import User
 
 from ..models import MaterialBatch, MaterialStock, Zone, Floor
@@ -51,6 +52,8 @@ def inbound_material_batch(
             stock.save()
 
         batch.received_quantity += quantity
+        if not batch.inbound_date:
+            batch.inbound_date = timezone.now().date()
         if batch.received_quantity >= batch.total_quantity:
             batch.status = 'in_stock'
         else:

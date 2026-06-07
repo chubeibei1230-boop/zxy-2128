@@ -46,6 +46,8 @@ class MaterialCategory(models.Model):
     parent = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='children', verbose_name='父级类别')
     unit = models.CharField(max_length=20, verbose_name='计量单位')
     description = models.TextField(blank=True, null=True, verbose_name='描述')
+    safety_threshold = models.DecimalField(max_digits=15, decimal_places=2, default=10, verbose_name='安全库存阈值')
+    shelf_life_days = models.IntegerField(default=180, verbose_name='保质期(天)')
     is_active = models.BooleanField(default=True, verbose_name='是否启用')
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -96,10 +98,12 @@ class Zone(models.Model):
         total_quantity = stocks.aggregate(total=Sum('quantity'))['total'] or 0
         usage_count = MaterialUsage.objects.filter(zone_id__in=all_zone_ids).count()
         exception_count = ExceptionRecord.objects.filter(zone_id__in=all_zone_ids, status='pending').count()
+        warning_count = MaterialWarning.objects.filter(zone_id__in=all_zone_ids, status__in=['pending', 'processing']).count()
         return {
             'total_quantity': total_quantity,
             'usage_count': usage_count,
             'exception_count': exception_count,
+            'warning_count': warning_count,
             'sub_zone_count': self.children.filter(is_active=True).count()
         }
 
@@ -151,6 +155,8 @@ class MaterialBatch(models.Model):
     total_quantity = models.DecimalField(max_digits=15, decimal_places=2, verbose_name='总数量')
     received_quantity = models.DecimalField(max_digits=15, decimal_places=2, default=0, verbose_name='已入库数量')
     unit_price = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, verbose_name='单价')
+    production_date = models.DateField(blank=True, null=True, verbose_name='生产日期')
+    inbound_date = models.DateField(blank=True, null=True, verbose_name='入库日期')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', verbose_name='状态')
     remark = models.TextField(blank=True, null=True, verbose_name='备注')
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='created_batches', verbose_name='创建人')
@@ -351,3 +357,69 @@ class InventoryCheckItem(models.Model):
         else:
             self.diff_type = 'no_diff'
         super().save(*args, **kwargs)
+
+
+class MaterialWarning(models.Model):
+    TYPE_CHOICES = (
+        ('low_stock', '低库存预警'),
+        ('expiring', '临期预警'),
+        ('long_unused', '长期未使用预警'),
+        ('overstock', '库存积压预警'),
+    )
+    STATUS_CHOICES = (
+        ('pending', '待处理'),
+        ('processing', '处理中'),
+        ('processed', '已处理'),
+        ('ignored', '已忽略'),
+    )
+    PRIORITY_CHOICES = (
+        ('low', '低'),
+        ('medium', '中'),
+        ('high', '高'),
+        ('urgent', '紧急'),
+    )
+    warning_no = models.CharField(max_length=100, unique=True, verbose_name='预警编号')
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='warnings', verbose_name='所属项目')
+    zone = models.ForeignKey(Zone, on_delete=models.CASCADE, related_name='warnings', verbose_name='所属分区')
+    floor = models.ForeignKey(Floor, on_delete=models.SET_NULL, null=True, blank=True, related_name='warnings', verbose_name='楼层位置')
+    material_category = models.ForeignKey(MaterialCategory, on_delete=models.CASCADE, related_name='warnings', verbose_name='材料类别')
+    material_batch = models.ForeignKey(MaterialBatch, on_delete=models.CASCADE, related_name='warnings', verbose_name='材料批次')
+    material_stock = models.ForeignKey(MaterialStock, on_delete=models.SET_NULL, null=True, blank=True, related_name='warnings', verbose_name='关联库存')
+    warning_type = models.CharField(max_length=50, choices=TYPE_CHOICES, verbose_name='预警类型')
+    priority = models.CharField(max_length=20, choices=PRIORITY_CHOICES, default='medium', verbose_name='优先级')
+    description = models.TextField(verbose_name='预警描述')
+    current_quantity = models.DecimalField(max_digits=15, decimal_places=2, default=0, verbose_name='当前数量')
+    threshold_quantity = models.DecimalField(max_digits=15, decimal_places=2, default=0, verbose_name='阈值数量')
+    warning_days = models.IntegerField(default=0, verbose_name='预警天数')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', verbose_name='状态')
+    handling_opinion = models.TextField(blank=True, null=True, verbose_name='处理意见')
+    handling_result = models.TextField(blank=True, null=True, verbose_name='处理结果')
+    responsible_person = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='responsible_warnings', verbose_name='责任人')
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='created_warnings', verbose_name='创建人')
+    handled_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='handled_warnings', verbose_name='处理人')
+    created_at = models.DateTimeField(auto_now_add=True)
+    handled_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'material_warning'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.warning_no} - {self.get_warning_type_display()}'
+
+    def get_project_statistics(self):
+        warnings = MaterialWarning.objects.filter(project=self.project)
+        total = warnings.count()
+        pending = warnings.filter(status='pending').count()
+        processing = warnings.filter(status='processing').count()
+        processed = warnings.filter(status='processed').count()
+        ignored = warnings.filter(status='ignored').count()
+        return {
+            'total': total,
+            'pending': pending,
+            'processing': processing,
+            'processed': processed,
+            'ignored': ignored,
+            'completion_rate': round((processed + ignored) / total * 100, 2) if total > 0 else 0
+        }

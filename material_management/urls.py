@@ -7,7 +7,8 @@ from .views import (
     ProjectViewSet, MaterialCategoryViewSet, ZoneViewSet,
     FloorViewSet, ResponsibilityGroupViewSet, MaterialBatchViewSet,
     MaterialStockViewSet, MaterialTransferViewSet, MaterialUsageViewSet,
-    ExceptionRecordViewSet, DashboardView, InventoryCheckViewSet
+    ExceptionRecordViewSet, DashboardView, InventoryCheckViewSet,
+    MaterialWarningViewSet, WarningDashboardView
 )
 
 router = DefaultRouter()
@@ -23,10 +24,12 @@ router.register(r'material-transfers', MaterialTransferViewSet)
 router.register(r'material-usages', MaterialUsageViewSet)
 router.register(r'exception-records', ExceptionRecordViewSet)
 router.register(r'inventory-checks', InventoryCheckViewSet)
+router.register(r'material-warnings', MaterialWarningViewSet)
 
 urlpatterns = [
     path('', include(router.urls)),
     path('auth/login/', obtain_auth_token, name='api_token_auth'),
     path('auth/current-user/', current_user, name='current_user'),
     path('dashboard/', DashboardView.as_view(), name='dashboard'),
+    path('warning-dashboard/', WarningDashboardView.as_view(), name='warning_dashboard'),
 ]

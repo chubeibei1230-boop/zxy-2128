@@ -10,7 +10,7 @@ from .models import (
     UserProfile, Project, MaterialCategory, Zone, Floor,
     ResponsibilityGroup, MaterialBatch, MaterialStock,
     MaterialTransfer, MaterialUsage, ExceptionRecord,
-    InventoryCheck, InventoryCheckItem
+    InventoryCheck, InventoryCheckItem, MaterialWarning
 )
 from .utils import parse_bool_param
 
@@ -237,6 +237,11 @@ def get_dashboard_stats(project_id: str | None = None) -> dict:
     pending_inventory_check = InventoryCheck.objects.filter(**inventory_params, status='submitted').count()
     total_inventory_check = InventoryCheck.objects.filter(**inventory_params).count()
 
+    warning_params = zone_params.copy()
+    pending_warning = MaterialWarning.objects.filter(**warning_params, status='pending').count()
+    processing_warning = MaterialWarning.objects.filter(**warning_params, status='processing').count()
+    total_warning = MaterialWarning.objects.filter(**warning_params).count()
+
     return {
         'total_projects': total_projects,
         'total_zones': total_zones,
@@ -245,7 +250,10 @@ def get_dashboard_stats(project_id: str | None = None) -> dict:
         'pending_exception': pending_exception,
         'pending_transfer': pending_transfer,
         'pending_inventory_check': pending_inventory_check,
-        'total_inventory_check': total_inventory_check
+        'total_inventory_check': total_inventory_check,
+        'pending_warning': pending_warning,
+        'processing_warning': processing_warning,
+        'total_warning': total_warning
     }
 
 
@@ -297,4 +305,38 @@ def get_zone_stocks_for_inventory(zone: Zone, floor: Floor | None = None) -> Que
     )
     if floor:
         queryset = queryset.filter(floor=floor)
+    return queryset
+
+
+def get_material_warning_queryset(
+    request,
+    project: str | None = None,
+    zone: str | None = None,
+    material_category: str | None = None,
+    status: str | None = None,
+    warning_type: str | None = None,
+    priority: str | None = None
+) -> QuerySet:
+    queryset = MaterialWarning.objects.select_related(
+        'project', 'zone', 'floor', 'material_category',
+        'material_batch', 'material_stock', 'responsible_person',
+        'created_by', 'handled_by'
+    ).all()
+    if project:
+        queryset = queryset.filter(project_id=project)
+    if zone:
+        try:
+            zone_obj = Zone.objects.get(id=zone)
+            all_zone_ids = zone_obj.get_all_child_ids()
+            queryset = queryset.filter(zone_id__in=all_zone_ids)
+        except Zone.DoesNotExist:
+            queryset = queryset.none()
+    if material_category:
+        queryset = queryset.filter(material_category_id=material_category)
+    if status:
+        queryset = queryset.filter(status=status)
+    if warning_type:
+        queryset = queryset.filter(warning_type=warning_type)
+    if priority:
+        queryset = queryset.filter(priority=priority)
     return queryset
