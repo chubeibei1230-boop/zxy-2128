@@ -113,7 +113,13 @@ def merge_zones(target_zone_id: int, source_zone_ids: list[int]) -> Zone:
                 MaterialTransfer.objects.filter(to_zone=source_zone).update(to_zone=target_zone)
                 MaterialUsage.objects.filter(zone=source_zone).update(zone=target_zone)
                 ExceptionRecord.objects.filter(zone=source_zone).update(zone=target_zone)
-                Zone.objects.filter(parent=source_zone).update(parent=target_zone)
+
+                # Re-parent child zones one by one so their stored levels stay consistent.
+                for child_zone in Zone.objects.filter(parent=source_zone):
+                    child_zone.parent = target_zone
+                    child_zone.level = target_zone.level + 1
+                    child_zone.save()
+                    update_zone_children_level(child_zone, child_zone.level)
 
                 source_zone.is_active = False
                 source_zone.save()

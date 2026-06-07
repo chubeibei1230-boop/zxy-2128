@@ -212,22 +212,24 @@ def get_exception_record_queryset(
 
 
 def get_dashboard_stats(project_id: str | None = None) -> dict:
-    query_params = {}
+    zone_params = {}
+    project_params = {}
     if project_id:
-        query_params['project_id'] = project_id
+        zone_params['project_id'] = project_id
+        project_params['id'] = project_id
 
-    total_projects = Project.objects.filter(is_active=True).count()
-    total_zones = Zone.objects.filter(**query_params, is_active=True).count()
+    total_projects = Project.objects.filter(**project_params, is_active=True).count()
+    total_zones = Zone.objects.filter(**zone_params, is_active=True).count()
 
-    stock_params = {k.replace('project_id', 'zone__project_id'): v for k, v in query_params.items()}
+    stock_params = {k.replace('project_id', 'zone__project_id'): v for k, v in zone_params.items()}
     total_stock = MaterialStock.objects.filter(**stock_params).aggregate(
         total=Sum('quantity')
     )['total'] or 0
 
-    pending_usage = MaterialUsage.objects.filter(**query_params, status='pending').count()
-    pending_exception = ExceptionRecord.objects.filter(**query_params, status='pending').count()
+    pending_usage = MaterialUsage.objects.filter(**zone_params, status='pending').count()
+    pending_exception = ExceptionRecord.objects.filter(**zone_params, status='pending').count()
 
-    transfer_params = {k.replace('project_id', 'from_zone__project_id'): v for k, v in query_params.items()}
+    transfer_params = {k.replace('project_id', 'from_zone__project_id'): v for k, v in zone_params.items()}
     pending_transfer = MaterialTransfer.objects.filter(**transfer_params, status='pending').count()
 
     return {
