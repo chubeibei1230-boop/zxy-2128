@@ -155,6 +155,8 @@ class ZoneViewSet(viewsets.ModelViewSet):
     def update(self, request, *args, **kwargs):
         instance = self.get_object()
         parent_id = request.data.get('parent')
+        level_changed = False
+        new_level = instance.level
         if parent_id is not None:
             if parent_id == instance.id:
                 return Response({'error': '不能将自己设为父级'}, status=status.HTTP_400_BAD_REQUEST)
@@ -164,13 +166,20 @@ class ZoneViewSet(viewsets.ModelViewSet):
                     child_ids = instance.get_all_child_ids()
                     if parent.id in child_ids:
                         return Response({'error': '不能将子分区设为父级'}, status=status.HTTP_400_BAD_REQUEST)
-                    level = parent.level + 1
+                    new_level = parent.level + 1
+                    level_changed = True
                 except Zone.DoesNotExist:
-                    level = 1
+                    new_level = 1
+                    level_changed = True
             else:
-                level = 1
-            request.data['level'] = level
-        return super().update(request, *args, **kwargs)
+                new_level = 1
+                level_changed = True
+            request.data['level'] = new_level
+        response = super().update(request, *args, **kwargs)
+        if level_changed:
+            instance.refresh_from_db()
+            self._update_children_level(instance, instance.level)
+        return response
 
     @action(detail=False, methods=['get'])
     def tree(self, request):
@@ -180,6 +189,13 @@ class ZoneViewSet(viewsets.ModelViewSet):
         roots = Zone.objects.filter(project_id=project_id, parent__isnull=True, is_active=True)
         serializer = ZoneTreeSerializer(roots, many=True)
         return Response(serializer.data)
+
+    def _update_children_level(self, zone, new_level):
+        children = zone.children.all()
+        for child in children:
+            child.level = new_level + 1
+            child.save()
+            self._update_children_level(child, child.level)
 
     @action(detail=True, methods=['post'], permission_classes=[IsAdmin])
     def move(self, request, pk=None):
@@ -203,6 +219,7 @@ class ZoneViewSet(viewsets.ModelViewSet):
             zone.parent = None
             zone.level = 1
         zone.save()
+        self._update_children_level(zone, zone.level)
         return Response(ZoneSerializer(zone).data)
 
     @action(detail=False, methods=['post'], permission_classes=[IsAdmin])
@@ -225,7 +242,21 @@ class ZoneViewSet(viewsets.ModelViewSet):
                     source_zone = Zone.objects.get(id=source_id)
                     if source_zone.project_id != target_zone.project_id:
                         continue
-                    MaterialStock.objects.filter(zone=source_zone).update(zone=target_zone)
+                    source_stocks = MaterialStock.objects.filter(zone=source_zone)
+                    for source_stock in source_stocks:
+                        try:
+                            target_stock = MaterialStock.objects.get(
+                                zone=target_zone,
+                                material_category=source_stock.material_category,
+                                material_batch=source_stock.material_batch,
+                                floor=source_stock.floor
+                            )
+                            target_stock.quantity += source_stock.quantity
+                            target_stock.save()
+                            source_stock.delete()
+                        except MaterialStock.DoesNotExist:
+                            source_stock.zone = target_zone
+                            source_stock.save()
                     MaterialTransfer.objects.filter(from_zone=source_zone).update(from_zone=target_zone)
                     MaterialTransfer.objects.filter(to_zone=source_zone).update(to_zone=target_zone)
                     MaterialUsage.objects.filter(zone=source_zone).update(zone=target_zone)
@@ -394,9 +425,12 @@ class MaterialStockViewSet(viewsets.ReadOnlyModelViewSet):
         ).all()
         zone = self.request.query_params.get('zone')
         if zone:
-            zone_obj = Zone.objects.get(id=zone)
-            all_zone_ids = zone_obj.get_all_child_ids()
-            queryset = queryset.filter(zone_id__in=all_zone_ids)
+            try:
+                zone_obj = Zone.objects.get(id=zone)
+                all_zone_ids = zone_obj.get_all_child_ids()
+                queryset = queryset.filter(zone_id__in=all_zone_ids)
+            except Zone.DoesNotExist:
+                queryset = queryset.none()
         material_category = self.request.query_params.get('material_category')
         if material_category:
             queryset = queryset.filter(material_category_id=material_category)
@@ -488,9 +522,9 @@ class MaterialUsageViewSet(viewsets.ModelViewSet):
     serializer_class = MaterialUsageSerializer
 
     def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+        if self.action in ['create', 'update', 'partial_update', 'destroy', 'use']:
             permission_classes = [IsAdminOrOperator]
-        elif self.action in ['approve', 'reject', 'use']:
+        elif self.action in ['approve', 'reject']:
             permission_classes = [IsAdminOrAuditor]
         else:
             permission_classes = [permissions.IsAuthenticated]
@@ -588,9 +622,12 @@ class ExceptionRecordViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(project_id=project)
         zone = self.request.query_params.get('zone')
         if zone:
-            zone_obj = Zone.objects.get(id=zone)
-            all_zone_ids = zone_obj.get_all_child_ids()
-            queryset = queryset.filter(zone_id__in=all_zone_ids)
+            try:
+                zone_obj = Zone.objects.get(id=zone)
+                all_zone_ids = zone_obj.get_all_child_ids()
+                queryset = queryset.filter(zone_id__in=all_zone_ids)
+            except Zone.DoesNotExist:
+                queryset = queryset.none()
         status = self.request.query_params.get('status')
         if status:
             queryset = queryset.filter(status=status)
