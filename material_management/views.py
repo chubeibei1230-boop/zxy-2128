@@ -719,13 +719,21 @@ class MaterialWarningViewSet(viewsets.ReadOnlyModelViewSet):
         data = serializer.validated_data
         if not data.get('handling_result'):
             return Response({'error': '请填写处理结果'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if data.get('force_close') and not IsAdminOrAuditor().has_permission(request, self):
+            return Response({'error': '只有管理员或审核员可以强制关闭预警'}, status=status.HTTP_403_FORBIDDEN)
+        
         try:
             updated_warning = process_warning(
                 warning,
                 request.user,
                 handling_result=data['handling_result'],
                 handling_opinion=data.get('handling_opinion'),
-                responsible_person_id=data.get('responsible_person')
+                responsible_person_id=data.get('responsible_person'),
+                force_close=data.get('force_close', False),
+                related_usage_id=data.get('related_usage'),
+                related_exception_id=data.get('related_exception'),
+                related_inventory_check_id=data.get('related_inventory_check')
             )
             return Response(MaterialWarningSerializer(updated_warning).data)
         except ValidationError as e:

@@ -5,7 +5,7 @@ from django.db import transaction
 from datetime import timedelta
 from material_management.models import (
     Project, MaterialCategory, Zone, Floor,
-    MaterialBatch, MaterialStock, UserProfile
+    MaterialBatch, MaterialStock, UserProfile, MaterialUsage
 )
 from material_management.services.warning_service import run_warning_detection
 
@@ -40,8 +40,11 @@ class Command(BaseCommand):
         self.stdout.write('创建低库存预警场景...')
         self._create_low_stock_scenario(project, zone, floor, operator)
 
-        self.stdout.write('创建临期预警场景...')
+        self.stdout.write('创建临期预警场景（含部分入库）...')
         self._create_expiring_scenario(project, zone, floor, operator)
+
+        self.stdout.write('创建长期未使用预警场景...')
+        self._create_long_unused_scenario(project, zone, floor, operator)
 
         self.stdout.write('创建库存积压预警场景...')
         self._create_overstock_scenario(project, zone, floor, operator)
@@ -136,6 +139,28 @@ class Command(BaseCommand):
             quantity=150
         )
 
+        batch_partial = MaterialBatch.objects.create(
+            batch_no=f'BATCH-EXPIRING-PARTIAL-{timezone.now().strftime("%Y%m%d%H%M%S")}',
+            project=project,
+            material_category=concrete_category,
+            supplier='中建商砼',
+            total_quantity=100,
+            received_quantity=40,
+            unit_price=420,
+            production_date=timezone.now().date() - timedelta(days=80),
+            inbound_date=timezone.now().date() - timedelta(days=75),
+            status='partial',
+            created_by=operator
+        )
+
+        MaterialStock.objects.create(
+            zone=zone,
+            floor=floor,
+            material_category=concrete_category,
+            material_batch=batch_partial,
+            quantity=40
+        )
+
         wood_category = MaterialCategory.objects.filter(code='WOOD').first()
         if wood_category:
             wood_category.shelf_life_days = 180
@@ -163,25 +188,182 @@ class Command(BaseCommand):
                 quantity=80
             )
 
-    def _create_overstock_scenario(self, project, zone, floor, operator):
-        pipe_category = MaterialCategory.objects.filter(code='STEEL-PIPE').first()
+    def _create_long_unused_scenario(self, project, zone, floor, operator):
+        brick_category = MaterialCategory.objects.filter(code='BRICK').first()
+        if not brick_category:
+            brick_category = MaterialCategory.objects.create(
+                name='红砖',
+                code='BRICK',
+                unit='块',
+                safety_threshold=1000,
+                shelf_life_days=730
+            )
+        else:
+            brick_category.safety_threshold = 1000
+            brick_category.shelf_life_days = 730
+            brick_category.save()
+
+        batch_old = MaterialBatch.objects.create(
+            batch_no=f'BATCH-LONGUNUSED-{timezone.now().strftime("%Y%m%d%H%M%S")}',
+            project=project,
+            material_category=brick_category,
+            supplier='本地砖厂',
+            total_quantity=5000,
+            received_quantity=5000,
+            unit_price=0.8,
+            production_date=timezone.now().date() - timedelta(days=200),
+            inbound_date=timezone.now().date() - timedelta(days=195),
+            status='in_stock',
+            created_by=operator
+        )
+
+        old_time = timezone.now() - timedelta(days=120)
+        stock_old = MaterialStock.objects.create(
+            zone=zone,
+            floor=floor,
+            material_category=brick_category,
+            material_batch=batch_old,
+            quantity=5000
+        )
+        MaterialStock.objects.filter(id=stock_old.id).update(
+            updated_at=old_time,
+            created_at=old_time
+        )
+
+        pipe_category = MaterialCategory.objects.filter(code='PVC-PIPE').first()
         if not pipe_category:
-            return
+            pipe_category = MaterialCategory.objects.create(
+                name='PVC管道',
+                code='PVC-PIPE',
+                unit='米',
+                safety_threshold=50,
+                shelf_life_days=365
+            )
+        else:
+            pipe_category.safety_threshold = 50
+            pipe_category.shelf_life_days = 365
+            pipe_category.save()
 
-        pipe_category.safety_threshold = 10
-        pipe_category.shelf_life_days = 365
-        pipe_category.save()
-
-        batch1 = MaterialBatch.objects.create(
-            batch_no=f'BATCH-OVERSTOCK-{timezone.now().strftime("%Y%m%d%H%M%S")}',
+        batch_pipe = MaterialBatch.objects.create(
+            batch_no=f'BATCH-LONGUNUSED2-{timezone.now().strftime("%Y%m%d%H%M%S")}',
             project=project,
             material_category=pipe_category,
-            supplier='宝钢股份',
-            total_quantity=500,
-            received_quantity=500,
-            unit_price=6800,
-            production_date=timezone.now().date() - timedelta(days=60),
-            inbound_date=timezone.now().date() - timedelta(days=55),
+            supplier='联塑管道',
+            total_quantity=200,
+            received_quantity=200,
+            unit_price=25,
+            production_date=timezone.now().date() - timedelta(days=150),
+            inbound_date=timezone.now().date() - timedelta(days=140),
+            status='in_stock',
+            created_by=operator
+        )
+
+        stock_pipe = MaterialStock.objects.create(
+            zone=zone,
+            floor=floor,
+            material_category=pipe_category,
+            material_batch=batch_pipe,
+            quantity=200
+        )
+        MaterialStock.objects.filter(id=stock_pipe.id).update(
+            updated_at=old_time,
+            created_at=old_time
+        )
+
+    def _create_overstock_scenario(self, project, zone, floor, operator):
+        sand_category = MaterialCategory.objects.filter(code='SAND').first()
+        if not sand_category:
+            sand_category = MaterialCategory.objects.create(
+                name='河沙',
+                code='SAND',
+                unit='吨',
+                safety_threshold=20,
+                shelf_life_days=1095
+            )
+        else:
+            sand_category.safety_threshold = 20
+            sand_category.shelf_life_days = 1095
+            sand_category.save()
+
+        batch_sand = MaterialBatch.objects.create(
+            batch_no=f'BATCH-OVERSTOCK-{timezone.now().strftime("%Y%m%d%H%M%S")}',
+            project=project,
+            material_category=sand_category,
+            supplier='沙场直供',
+            total_quantity=200,
+            received_quantity=200,
+            unit_price=120,
+            production_date=timezone.now().date() - timedelta(days=100),
+            inbound_date=timezone.now().date() - timedelta(days=95),
+            status='in_stock',
+            created_by=operator
+        )
+
+        stock_sand = MaterialStock.objects.create(
+            zone=zone,
+            floor=floor,
+            material_category=sand_category,
+            material_batch=batch_sand,
+            quantity=200
+        )
+
+        old_usage_time = timezone.now() - timedelta(days=100)
+        usage1 = MaterialUsage.objects.create(
+            usage_no=f'USAGE-HIST-1-{timezone.now().strftime("%Y%m%d%H%M%S")}',
+            project=project,
+            zone=zone,
+            floor=floor,
+            material_category=sand_category,
+            material_batch=batch_sand,
+            quantity=5,
+            status='used',
+            created_by=operator,
+            used_by=operator
+        )
+        MaterialUsage.objects.filter(id=usage1.id).update(
+            created_at=old_usage_time
+        )
+
+        usage2 = MaterialUsage.objects.create(
+            usage_no=f'USAGE-HIST-2-{timezone.now().strftime("%Y%m%d%H%M%S")}',
+            project=project,
+            zone=zone,
+            floor=floor,
+            material_category=sand_category,
+            material_batch=batch_sand,
+            quantity=5,
+            status='used',
+            created_by=operator,
+            used_by=operator
+        )
+        MaterialUsage.objects.filter(id=usage2.id).update(
+            created_at=old_usage_time + timedelta(days=1)
+        )
+
+        gravel_category = MaterialCategory.objects.filter(code='GRAVEL').first()
+        if not gravel_category:
+            gravel_category = MaterialCategory.objects.create(
+                name='碎石',
+                code='GRAVEL',
+                unit='吨',
+                safety_threshold=15,
+                shelf_life_days=1095
+            )
+        else:
+            gravel_category.safety_threshold = 15
+            gravel_category.shelf_life_days = 1095
+            gravel_category.save()
+
+        batch_gravel = MaterialBatch.objects.create(
+            batch_no=f'BATCH-OVERSTOCK2-{timezone.now().strftime("%Y%m%d%H%M%S")}',
+            project=project,
+            material_category=gravel_category,
+            supplier='采石场',
+            total_quantity=300,
+            received_quantity=300,
+            unit_price=90,
+            production_date=timezone.now().date() - timedelta(days=80),
+            inbound_date=timezone.now().date() - timedelta(days=75),
             status='in_stock',
             created_by=operator
         )
@@ -189,7 +371,23 @@ class Command(BaseCommand):
         MaterialStock.objects.create(
             zone=zone,
             floor=floor,
-            material_category=pipe_category,
-            material_batch=batch1,
-            quantity=500
+            material_category=gravel_category,
+            material_batch=batch_gravel,
+            quantity=300
+        )
+
+        usage3 = MaterialUsage.objects.create(
+            usage_no=f'USAGE-HIST-3-{timezone.now().strftime("%Y%m%d%H%M%S")}',
+            project=project,
+            zone=zone,
+            floor=floor,
+            material_category=gravel_category,
+            material_batch=batch_gravel,
+            quantity=3,
+            status='used',
+            created_by=operator,
+            used_by=operator
+        )
+        MaterialUsage.objects.filter(id=usage3.id).update(
+            created_at=old_usage_time
         )

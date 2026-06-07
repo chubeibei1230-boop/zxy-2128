@@ -333,6 +333,10 @@ class WarningProcessSerializer(serializers.Serializer):
     handling_opinion = serializers.CharField(required=False, allow_blank=True)
     handling_result = serializers.CharField(required=False, allow_blank=True)
     responsible_person = serializers.IntegerField(required=False, allow_null=True)
+    force_close = serializers.BooleanField(required=False, default=False)
+    related_usage = serializers.IntegerField(required=False, allow_null=True)
+    related_exception = serializers.IntegerField(required=False, allow_null=True)
+    related_inventory_check = serializers.IntegerField(required=False, allow_null=True)
 
 
 class WarningReopenSerializer(serializers.Serializer):

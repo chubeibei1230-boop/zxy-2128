@@ -38,25 +38,36 @@ def detect_low_stock_warnings(project_id: int | None = None, user: User | None =
         safety_threshold = category.safety_threshold
         
         if stock.quantity < safety_threshold:
+            diff = safety_threshold - stock.quantity
+            priority = 'low'
+            if diff > safety_threshold * Decimal('0.8'):
+                priority = 'urgent'
+            elif diff > safety_threshold * Decimal('0.5'):
+                priority = 'high'
+            elif diff > safety_threshold * Decimal('0.2'):
+                priority = 'medium'
+            
             existing_warning = MaterialWarning.objects.filter(
                 project=stock.zone.project,
                 zone=stock.zone,
                 material_category=stock.material_category,
                 material_batch=stock.material_batch,
-                warning_type='low_stock',
-                status__in=['pending', 'processing']
+                warning_type='low_stock'
             ).first()
             
-            if not existing_warning:
-                diff = safety_threshold - stock.quantity
-                priority = 'low'
-                if diff > safety_threshold * Decimal('0.8'):
-                    priority = 'urgent'
-                elif diff > safety_threshold * Decimal('0.5'):
-                    priority = 'high'
-                elif diff > safety_threshold * Decimal('0.2'):
-                    priority = 'medium'
-                
+            if existing_warning:
+                if existing_warning.status in ['processed', 'ignored']:
+                    existing_warning.status = 'pending'
+                    existing_warning.current_quantity = stock.quantity
+                    existing_warning.threshold_quantity = safety_threshold
+                    existing_warning.priority = priority
+                    existing_warning.description = f'库存数量 {stock.quantity} {category.unit} 低于安全阈值 {safety_threshold} {category.unit}'
+                    existing_warning.handled_by = None
+                    existing_warning.handled_at = None
+                    existing_warning.handling_result = None
+                    existing_warning.save()
+                    warnings.append(existing_warning)
+            else:
                 warning = MaterialWarning.objects.create(
                     warning_no=generate_warning_no(),
                     project=stock.zone.project,
@@ -82,7 +93,7 @@ def detect_expiring_warnings(project_id: int | None = None, user: User | None = 
     batches = MaterialBatch.objects.select_related(
         'project', 'material_category'
     ).filter(
-        status='in_stock',
+        status__in=['in_stock', 'partial'],
         production_date__isnull=False
     )
     if project_id:
@@ -99,6 +110,14 @@ def detect_expiring_warnings(project_id: int | None = None, user: User | None = 
         days_to_expiry = (expiry_date - today).days
         
         if days_to_expiry <= EXPIRING_WARNING_DAYS and days_to_expiry >= 0:
+            priority = 'low'
+            if days_to_expiry <= 7:
+                priority = 'urgent'
+            elif days_to_expiry <= 15:
+                priority = 'high'
+            elif days_to_expiry <= 30:
+                priority = 'medium'
+            
             stocks = MaterialStock.objects.filter(material_batch=batch)
             for stock in stocks:
                 existing_warning = MaterialWarning.objects.filter(
@@ -106,19 +125,22 @@ def detect_expiring_warnings(project_id: int | None = None, user: User | None = 
                     zone=stock.zone,
                     material_category=category,
                     material_batch=batch,
-                    warning_type='expiring',
-                    status__in=['pending', 'processing']
+                    warning_type='expiring'
                 ).first()
                 
-                if not existing_warning:
-                    priority = 'low'
-                    if days_to_expiry <= 7:
-                        priority = 'urgent'
-                    elif days_to_expiry <= 15:
-                        priority = 'high'
-                    elif days_to_expiry <= 30:
-                        priority = 'medium'
-                    
+                if existing_warning:
+                    if existing_warning.status in ['processed', 'ignored']:
+                        existing_warning.status = 'pending'
+                        existing_warning.current_quantity = stock.quantity
+                        existing_warning.warning_days = days_to_expiry
+                        existing_warning.priority = priority
+                        existing_warning.description = f'批次 {batch.batch_no} 将于 {expiry_date} 到期，剩余 {days_to_expiry} 天'
+                        existing_warning.handled_by = None
+                        existing_warning.handled_at = None
+                        existing_warning.handling_result = None
+                        existing_warning.save()
+                        warnings.append(existing_warning)
+                else:
                     warning = MaterialWarning.objects.create(
                         warning_no=generate_warning_no(),
                         project=batch.project,
@@ -160,21 +182,32 @@ def detect_long_unused_warnings(project_id: int | None = None, user: User | None
         ).exists()
         
         if not recent_usage:
+            days_unused = (timezone.now() - stock.updated_at).days
+            priority = 'medium'
+            if days_unused > 180:
+                priority = 'high'
+            
             existing_warning = MaterialWarning.objects.filter(
                 project=stock.zone.project,
                 zone=stock.zone,
                 material_category=stock.material_category,
                 material_batch=stock.material_batch,
-                warning_type='long_unused',
-                status__in=['pending', 'processing']
+                warning_type='long_unused'
             ).first()
             
-            if not existing_warning:
-                days_unused = (timezone.now() - stock.updated_at).days
-                priority = 'medium'
-                if days_unused > 180:
-                    priority = 'high'
-                
+            if existing_warning:
+                if existing_warning.status in ['processed', 'ignored']:
+                    existing_warning.status = 'pending'
+                    existing_warning.current_quantity = stock.quantity
+                    existing_warning.warning_days = days_unused
+                    existing_warning.priority = priority
+                    existing_warning.description = f'材料已闲置 {days_unused} 天未使用'
+                    existing_warning.handled_by = None
+                    existing_warning.handled_at = None
+                    existing_warning.handling_result = None
+                    existing_warning.save()
+                    warnings.append(existing_warning)
+            else:
                 warning = MaterialWarning.objects.create(
                     warning_no=generate_warning_no(),
                     project=stock.zone.project,
@@ -197,7 +230,7 @@ def detect_long_unused_warnings(project_id: int | None = None, user: User | None
 
 def detect_overstock_warnings(project_id: int | None = None, user: User | None = None) -> list[MaterialWarning]:
     """检测库存积压预警"""
-    ninety_days_ago = timezone.now() - timedelta(days=90)
+    hundred_and_eighty_days_ago = timezone.now() - timedelta(days=180)
     stocks = MaterialStock.objects.select_related(
         'zone', 'zone__project', 'material_category', 'material_batch'
     ).filter(quantity__gt=0)
@@ -209,30 +242,54 @@ def detect_overstock_warnings(project_id: int | None = None, user: User | None =
         usage_sum = MaterialUsage.objects.filter(
             material_category=stock.material_category,
             zone=stock.zone,
-            created_at__gte=ninety_days_ago,
+            created_at__gte=hundred_and_eighty_days_ago,
             status__in=['approved', 'used']
         ).aggregate(total=Sum('quantity'))['total'] or 0
         
-        avg_monthly_usage = usage_sum / Decimal('3') if usage_sum > 0 else Decimal('0')
+        avg_monthly_usage = usage_sum / Decimal('6') if usage_sum > 0 else Decimal('0')
+        
+        category = stock.material_category
+        safety_threshold = category.safety_threshold
+        
+        is_overstock = False
+        threshold_qty = Decimal('0')
         
         if avg_monthly_usage > 0 and stock.quantity > avg_monthly_usage * OVERSTOCK_RATIO:
+            is_overstock = True
+            threshold_qty = round(avg_monthly_usage * OVERSTOCK_RATIO, 2)
+        elif avg_monthly_usage == 0 and stock.quantity > safety_threshold * Decimal('3'):
+            is_overstock = True
+            threshold_qty = safety_threshold * Decimal('3')
+        
+        if is_overstock:
+            overstock_ratio = round(float(stock.quantity) / float(avg_monthly_usage), 2) if avg_monthly_usage > 0 else round(float(stock.quantity) / float(safety_threshold), 2)
+            priority = 'low'
+            if overstock_ratio > 5:
+                priority = 'high'
+            elif overstock_ratio > 3:
+                priority = 'medium'
+            
             existing_warning = MaterialWarning.objects.filter(
                 project=stock.zone.project,
                 zone=stock.zone,
                 material_category=stock.material_category,
                 material_batch=stock.material_batch,
-                warning_type='overstock',
-                status__in=['pending', 'processing']
+                warning_type='overstock'
             ).first()
             
-            if not existing_warning:
-                overstock_ratio = round(float(stock.quantity) / float(avg_monthly_usage), 2) if avg_monthly_usage > 0 else 0
-                priority = 'low'
-                if overstock_ratio > 5:
-                    priority = 'high'
-                elif overstock_ratio > 3:
-                    priority = 'medium'
-                
+            if existing_warning:
+                if existing_warning.status in ['processed', 'ignored']:
+                    existing_warning.status = 'pending'
+                    existing_warning.current_quantity = stock.quantity
+                    existing_warning.threshold_quantity = threshold_qty
+                    existing_warning.priority = priority
+                    existing_warning.description = f'库存积压：当前库存 {stock.quantity}，月均使用量 {round(float(avg_monthly_usage), 2)}，积压倍数 {overstock_ratio}x'
+                    existing_warning.handled_by = None
+                    existing_warning.handled_at = None
+                    existing_warning.handling_result = None
+                    existing_warning.save()
+                    warnings.append(existing_warning)
+            else:
                 warning = MaterialWarning.objects.create(
                     warning_no=generate_warning_no(),
                     project=stock.zone.project,
@@ -245,7 +302,7 @@ def detect_overstock_warnings(project_id: int | None = None, user: User | None =
                     priority=priority,
                     description=f'库存积压：当前库存 {stock.quantity}，月均使用量 {round(float(avg_monthly_usage), 2)}，积压倍数 {overstock_ratio}x',
                     current_quantity=stock.quantity,
-                    threshold_quantity=round(avg_monthly_usage * OVERSTOCK_RATIO, 2),
+                    threshold_quantity=threshold_qty,
                     warning_days=0,
                     created_by=user
                 )
@@ -295,13 +352,67 @@ def start_processing_warning(warning: MaterialWarning, user: User,
 def process_warning(warning: MaterialWarning, user: User,
                     handling_result: str,
                     handling_opinion: str | None = None,
-                    responsible_person_id: int | None = None) -> MaterialWarning:
+                    responsible_person_id: int | None = None,
+                    force_close: bool = False,
+                    related_usage_id: int | None = None,
+                    related_exception_id: int | None = None,
+                    related_inventory_check_id: int | None = None) -> MaterialWarning:
     """处理预警（标记为已处理）"""
     if warning.status not in ['pending', 'processing']:
         raise ValidationError('只能处理待处理或处理中的预警')
     
+    if not force_close:
+        warning_type = warning.warning_type
+        problem_resolved = True
+        error_msg = ''
+        
+        if warning_type == 'low_stock':
+            if warning.material_stock:
+                current_qty = warning.material_stock.quantity
+                safety_threshold = warning.material_category.safety_threshold
+                if current_qty < safety_threshold:
+                    problem_resolved = False
+                    error_msg = f'库存问题未解决：当前库存 {current_qty} 仍低于安全阈值 {safety_threshold}，请先补货入库'
+        
+        elif warning_type == 'expiring':
+            if warning.material_stock and warning.material_stock.quantity > 0:
+                if not related_exception_id:
+                    problem_resolved = False
+                    error_msg = '临期材料仍有库存，请先通过异常流程处理报废或领用，并关联异常单'
+        
+        elif warning_type == 'long_unused':
+            ninety_days_ago = timezone.now() - timedelta(days=90)
+            recent_usage = MaterialUsage.objects.filter(
+                material_batch=warning.material_batch,
+                zone=warning.zone,
+                created_at__gte=ninety_days_ago,
+                status__in=['approved', 'used']
+            ).exists()
+            if not recent_usage and not related_usage_id:
+                problem_resolved = False
+                error_msg = '材料仍未使用，请先领用并关联领用单，或说明情况后强制关闭'
+        
+        elif warning_type == 'overstock':
+            ninety_days_ago = timezone.now() - timedelta(days=90)
+            usage_sum = MaterialUsage.objects.filter(
+                material_category=warning.material_category,
+                zone=warning.zone,
+                created_at__gte=ninety_days_ago,
+                status__in=['approved', 'used']
+            ).aggregate(total=Sum('quantity'))['total'] or 0
+            avg_monthly_usage = usage_sum / Decimal('3') if usage_sum > 0 else Decimal('0')
+            if avg_monthly_usage > 0 and warning.material_stock:
+                if warning.material_stock.quantity > avg_monthly_usage * OVERSTOCK_RATIO:
+                    problem_resolved = False
+                    error_msg = f'库存积压问题未解决：当前库存 {warning.material_stock.quantity} 仍超过月均用量 {round(float(avg_monthly_usage), 2)} 的2倍'
+        
+        if not problem_resolved:
+            raise ValidationError(error_msg)
+    
     warning.status = 'processed'
     warning.handling_result = handling_result
+    warning.force_close = force_close
+    
     if handling_opinion:
         warning.handling_opinion = handling_opinion
     if responsible_person_id:
@@ -311,6 +422,25 @@ def process_warning(warning: MaterialWarning, user: User,
             warning.responsible_person = responsible_person
         except User.DoesNotExist:
             raise ValidationError('指定的责任人不存在')
+    
+    if related_usage_id:
+        try:
+            warning.related_usage = MaterialUsage.objects.get(id=related_usage_id)
+        except MaterialUsage.DoesNotExist:
+            raise ValidationError('关联的领用单不存在')
+    
+    if related_exception_id:
+        try:
+            warning.related_exception = ExceptionRecord.objects.get(id=related_exception_id)
+        except ExceptionRecord.DoesNotExist:
+            raise ValidationError('关联的异常单不存在')
+    
+    if related_inventory_check_id:
+        try:
+            warning.related_inventory_check = InventoryCheck.objects.get(id=related_inventory_check_id)
+        except InventoryCheck.DoesNotExist:
+            raise ValidationError('关联的盘点单不存在')
+    
     warning.handled_by = user
     warning.handled_at = timezone.now()
     warning.save()
